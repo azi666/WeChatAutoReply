@@ -19,11 +19,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            fakeroot ldid dpkg perl git curl xz-utils make clang lld
+            fakeroot dpkg perl git curl xz-utils make clang lld libxml2-dev
 
       - name: Clone Theos
         run: |
           git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          # Theos ships prebuilt ldid; ensure it's executable
+          chmod +x "$THEOS"/bin/ldid 2>/dev/null || true
+          ls -la "$THEOS"/bin/ | head -30
 
       - name: Install iPhoneOS 16.5 SDK
         run: |
@@ -34,7 +37,11 @@ jobs:
           cp -r /tmp/sdks/iPhoneOS16.5.sdk "$THEOS/sdks/"
 
       - name: Build tweak
+        env:
+          PATH: ${{ github.workspace }}/theos/bin:${{ env.PATH }}
         run: |
+          echo "THEOS=$THEOS"
+          which ldid || echo "ldid not in PATH"
           make package FINALPACKAGE=1
 
       - name: Upload dylib (for TrollStore injection)
