@@ -26,22 +26,24 @@ jobs:
         run: |
           git clone --recursive https://github.com/theos/theos.git "$THEOS"
 
-      - name: Build ldid from Theos vendor source
+      - name: Install ldid
         run: |
-          # Theos vendor/ldid contains source + prebuilt binaries.
-          # Try prebuilt first; fall back to compiling from source.
-          if [ -x "$THEOS/vendor/ldid/ldid" ]; then
-            cp "$THEOS/vendor/ldid/ldid" "$THEOS/bin/ldid"
+          # Theos no longer bundles ldid; clone theos/ldid repo which ships
+          # prebuilt binaries for Linux.
+          git clone --depth 1 https://github.com/theos/ldid.git /tmp/ldid
+          if [ -x /tmp/ldid/ldid ]; then
+            cp /tmp/ldid/ldid "$THEOS/bin/ldid"
             chmod +x "$THEOS/bin/ldid"
-            echo "Using prebuilt ldid from vendor/ldid"
+            echo "Using prebuilt ldid"
           else
-            cd "$THEOS/vendor/ldid"
+            cd /tmp/ldid
             make
             cp ldid "$THEOS/bin/ldid"
             chmod +x "$THEOS/bin/ldid"
             echo "Built ldid from source"
           fi
           ls -la "$THEOS/bin/ldid"
+          "$THEOS/bin/ldid" --version 2>&1 || true
 
       - name: Install iPhoneOS 16.5 SDK
         run: |
