@@ -28,20 +28,19 @@ jobs:
 
       - name: Install ldid
         run: |
-          # Download theos/ldid source tarball via codeload (no git auth needed)
-          # and compile it. ldid is a single C++ source depending on libxml2.
+          # ldid is maintained by ProcursusTeam (theos/ldid is gone).
           curl -fsSL -o /tmp/ldid.tar.gz \
-            https://codeload.github.com/theos/ldid/tar.gz/refs/heads/master
+            https://codeload.github.com/ProcursusTeam/ldid/tar.gz/refs/heads/master
           tar -xzf /tmp/ldid.tar.gz -C /tmp
           cd /tmp/ldid-master
-          # Try the repo Makefile first; fall back to manual compile
-          if [ -f Makefile ]; then
-            make INSTALL_PREFIX=/usr 2>&1 | tail -5 || true
-          fi
+          # Build via Makefile; fall back to direct compile if it fails
+          make 2>&1 | tail -10 || true
           if [ -f ldid ]; then
             cp ldid "$THEOS/bin/ldid"
+          elif [ -f ldid2 ]; then
+            cp ldid2 "$THEOS/bin/ldid"
           else
-            clang++ -O2 -o "$THEOS/bin/ldid" ldid.cpp -lxml2 -lz -lpthread
+            clang++ -O2 -std=c++17 -o "$THEOS/bin/ldid" ldid.cpp -lxml2 -lz -lpthread 2>&1 | tail -10 || true
           fi
           chmod +x "$THEOS/bin/ldid"
           ls -la "$THEOS/bin/ldid"
