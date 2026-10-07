@@ -132,7 +132,7 @@ static void WARInstallEntry(UIViewController *host) {
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    WARInstallEntry(self);
+    WARInstallEntry((UIViewController *)self);
 }
 
 %end
@@ -141,7 +141,7 @@ static void WARInstallEntry(UIViewController *host) {
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    WARInstallEntry(self);
+    WARInstallEntry((UIViewController *)self);
 }
 
 %end
