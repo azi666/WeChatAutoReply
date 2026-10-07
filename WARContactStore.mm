@@ -6,32 +6,113 @@
 #import "WeChatHeaders.h"
 #import <objc/runtime.h>
 
+#pragma mark - 工具
+
 static CContactMgr *WARContactMgr(void) {
     @try {
         Class centerCls = objc_getClass("MMServiceCenter");
-        if (!centerCls) return nil;
+        if (!centerCls) {
+            NSLog(@"[WAR] MMServiceCenter class missing");
+            return nil;
+        }
         id center = [centerCls defaultCenter];
-        if (!center) return nil;
+        if (!center) {
+            NSLog(@"[WAR] MMServiceCenter defaultCenter nil");
+            return nil;
+        }
         Class mgrCls = objc_getClass("CContactMgr");
-        if (!mgrCls) return nil;
-        return [center getService:mgrCls];
+        if (!mgrCls) {
+            NSLog(@"[WAR] CContactMgr class missing");
+            return nil;
+        }
+        id svc = [center getService:mgrCls];
+        if (!svc) {
+            NSLog(@"[WAR] CContactMgr service not registered");
+        }
+        return svc;
+    }
+    @catch (NSException *e) {
+        NSLog(@"[WAR] WARContactMgr exception: %@", e);
+        return nil;
+    }
+}
+
+// 安全取属性
+static id WARSafeValue(id obj, NSString *key) {
+    if (!obj) return nil;
+    @try {
+        return [obj valueForKey:key];
     }
     @catch (NSException *e) {
         return nil;
     }
 }
 
-// 安全取 CContact 属性（属性不存在时返回 nil 而不是 crash）
 static NSString *WARSafeString(id obj, NSString *key) {
+    id v = WARSafeValue(obj, key);
+    if ([v isKindOfClass:[NSString class]]) return v;
+    return nil;
+}
+
+// 运行时遍历 obj 的所有 ivar，找出值是 NSDictionary 且 values 看起来像联系人的字典
+static NSDictionary *WARFindContactDictionary(id obj) {
     if (!obj) return nil;
     @try {
-        id v = [obj valueForKey:key];
-        if ([v isKindOfClass:[NSString class]]) return v;
-        return nil;
+        unsigned int count = 0;
+        Ivar *ivars = class_copyIvarList([obj class], &count);
+        for (unsigned int i = 0; i < count; i++) {
+            const char *name = ivar_getName(ivars[i]);
+            if (!name) continue;
+            NSString *key = [NSString stringWithUTF8String:name];
+            id val = WARSafeValue(obj, key);
+            if ([val isKindOfClass:[NSDictionary class]]) {
+                NSDictionary *d = (NSDictionary *)val;
+                if (d.count == 0) continue;
+                // 检查 values 里是否有 CContact（有 m_nsUsrName 属性且含 @chatroom 或 wxid_）
+                id firstVal = d.allValues.firstObject;
+                if (firstVal) {
+                    NSString *usr = WARSafeString(firstVal, @"m_nsUsrName");
+                    if (usr.length > 0) {
+                        NSLog(@"[WAR] found contact dict via ivar '%@', count=%lu, sample usr=%@",
+                              key, (unsigned long)d.count, usr);
+                        free(ivars);
+                        return d;
+                    }
+                }
+            }
+        }
+        free(ivars);
     }
     @catch (NSException *e) {
-        return nil;
+        NSLog(@"[WAR] WARFindContactDictionary exception: %@", e);
     }
+    return nil;
+}
+
+// 尝试调用返回 NSArray 的「获取所有联系人」方法
+static NSArray *WARTryGetAllContacts(id mgr) {
+    NSArray *selectors = @[
+        @"GetAllContact",
+        @"GetAllContacts",
+        @"GetContactList",
+        @"allContacts",
+        @"GetAllFriend",
+        @"GetAllFriends",
+    ];
+    for (NSString *selName in selectors) {
+        SEL sel = NSSelectorFromString(selName);
+        if ([mgr respondsToSelector:sel]) {
+            @try {
+                id arr = [mgr performSelector:sel];
+                if ([arr isKindOfClass:[NSArray class]] && [arr count] > 0) {
+                    NSLog(@"[WAR] GetAllContacts via '%@', count=%lu", selName, (unsigned long)[arr count]);
+                    return arr;
+                }
+            }
+            @catch (NSException *e) { }
+        }
+    }
+    return nil;
 }
 
 @implementation WARContactStore
@@ -41,10 +122,18 @@ static NSString *WARSafeString(id obj, NSString *key) {
         CContactMgr *mgr = WARContactMgr();
         if (!mgr) return nil;
         id selfContact = nil;
-        if ([mgr respondsToSelector:@selector(selfContact)]) {
-            selfContact = [mgr performSelector:@selector(selfContact)];
+        // 尝试多种获取自己联系人的方法
+        NSArray *sels = @[@"selfContact", @"GetSelfContact", @"getSelfContact"];
+        for (NSString *s in sels) {
+            SEL sel = NSSelectorFromString(s);
+            if ([mgr respondsToSelector:sel]) {
+                selfContact = [mgr performSelector:sel];
+                if (selfContact) break;
+            }
         }
-        return WARSafeString(selfContact, @"m_nsUsrName");
+        NSString *wxid = WARSafeString(selfContact, @"m_nsUsrName");
+        NSLog(@"[WAR] selfWxid=%@", wxid);
+        return wxid;
     }
     @catch (NSException *e) {
         return nil;
@@ -71,26 +160,68 @@ static NSString *WARSafeString(id obj, NSString *key) {
     NSMutableArray *result = [NSMutableArray array];
     @try {
         CContactMgr *mgr = WARContactMgr();
-        if (!mgr) return @[];
-        NSDictionary *dic = nil;
-        if ([mgr respondsToSelector:@selector(m_dicContact)]) {
-            dic = [mgr performSelector:@selector(m_dicContact)];
+        if (!mgr) {
+            NSLog(@"[WAR] allChatrooms: mgr nil");
+            return @[];
         }
-        if (![dic isKindOfClass:[NSDictionary class]]) return @[];
 
-        for (id contact in dic.allValues) {
+        // 1) 先尝试已知属性名 m_dicContact
+        NSDictionary *dic = nil;
+        NSArray *dictKeys = @[@"m_dicContact", @"m_dicContacts", @"dicContact", @"m_dicAllContact"];
+        for (NSString *k in dictKeys) {
+            id v = WARSafeValue(mgr, k);
+            if ([v isKindOfClass:[NSDictionary class]] && [v count] > 0) {
+                dic = v;
+                NSLog(@"[WAR] allChatrooms: found dict via '%@', count=%lu", k, (unsigned long)[v count]);
+                break;
+            }
+        }
+
+        // 2) 属性名拿不到，运行时遍历 ivar 找
+        if (dic.count == 0) {
+            dic = WARFindContactDictionary(mgr);
+        }
+
+        // 3) 还是没有，尝试 GetAllContact 类方法返回数组
+        NSArray *allContacts = nil;
+        if (dic.count == 0) {
+            allContacts = WARTryGetAllContacts(mgr);
+        }
+
+        if (dic.count == 0 && allContacts.count == 0) {
+            NSLog(@"[WAR] allChatrooms: no contact source found on CContactMgr");
+            // 打印 CContactMgr 所有 ivar 名供调试
+            unsigned int count = 0;
+            Ivar *ivars = class_copyIvarList([mgr class], &count);
+            NSMutableArray *names = [NSMutableArray array];
+            for (unsigned int i = 0; i < count; i++) {
+                const char *n = ivar_getName(ivars[i]);
+                if (n) [names addObject:[NSString stringWithUTF8String:n]];
+            }
+            free(ivars);
+            NSLog(@"[WAR] CContactMgr ivars: %@", names);
+            return @[];
+        }
+
+        // 遍历联系人，筛选群聊
+        NSArray *contacts = dic ? dic.allValues : allContacts;
+        for (id contact in contacts) {
             NSString *wxid = WARSafeString(contact, @"m_nsUsrName");
-            if (wxid.length == 0 || ![wxid hasSuffix:@"@chatroom"]) continue;
+            if (wxid.length == 0) continue;
+            // 群聊 ID 以 @chatroom 结尾
+            if (![wxid hasSuffix:@"@chatroom"]) continue;
             NSString *name = WARSafeString(contact, @"m_nsNickName");
             if (name.length == 0) name = wxid;
             [result addObject:@{ @"wxid": wxid, @"name": name }];
         }
+        NSLog(@"[WAR] allChatrooms: found %lu chatrooms from %lu contacts",
+              (unsigned long)result.count, (unsigned long)contacts.count);
     }
     @catch (NSException *e) {
+        NSLog(@"[WAR] allChatrooms exception: %@", e);
         return @[];
     }
 
-    // 按群名排序，方便查找
     [result sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
         return [a[@"name"] compare:b[@"name"] options:NSNumericSearch];
     }];
@@ -109,37 +240,49 @@ static NSString *WARSafeString(id obj, NSString *key) {
         if ([mgr respondsToSelector:@selector(GetContact:)]) {
             group = [mgr performSelector:@selector(GetContact:) withObject:chatroomId];
         }
-        if (!group) return @[];
+        if (!group) {
+            NSLog(@"[WAR] membersOfGroup: GetContact returned nil for %@", chatroomId);
+            return @[];
+        }
 
-        // 优先 m_nsChatRoomMemList（数组），回退 m_nsChatRoomMem（";" 分隔字符串）
+        // 多种成员列表属性名
         NSArray<NSString *> *memberIds = nil;
-        @try {
-            id list = [group valueForKey:@"m_nsChatRoomMemList"];
-            if ([list isKindOfClass:[NSArray class]]) {
+        NSArray *listKeys = @[@"m_nsChatRoomMemList", @"m_arrChatRoomMem", @"m_chatRoomMemList", @"chatRoomMemList"];
+        for (NSString *k in listKeys) {
+            id list = WARSafeValue(group, k);
+            if ([list isKindOfClass:[NSArray class]] && [list count] > 0) {
                 memberIds = list;
+                break;
             }
         }
-        @catch (NSException *e) { }
 
         if (memberIds.count == 0) {
-            NSString *memStr = WARSafeString(group, @"m_nsChatRoomMem");
-            if (memStr.length > 0) {
-                memberIds = [memStr componentsSeparatedByString:@";"];
+            // 回退：";" 分隔的字符串
+            NSArray *memStrKeys = @[@"m_nsChatRoomMem", @"m_szChatRoomMem", @"chatRoomMem"];
+            for (NSString *k in memStrKeys) {
+                NSString *memStr = WARSafeString(group, k);
+                if (memStr.length > 0) {
+                    memberIds = [memStr componentsSeparatedByString:@";"];
+                    break;
+                }
             }
         }
+
+        NSLog(@"[WAR] membersOfGroup %@: %lu members", chatroomId, (unsigned long)memberIds.count);
 
         NSString *selfWxid = [self selfWxid];
         for (id m in memberIds) {
             if (![m isKindOfClass:[NSString class]]) continue;
             NSString *wxid = (NSString *)m;
             if (wxid.length == 0) continue;
-            if (selfWxid.length > 0 && [wxid isEqualToString:selfWxid]) continue; // 排除自己
+            if (selfWxid.length > 0 && [wxid isEqualToString:selfWxid]) continue;
             NSString *name = [self nicknameOf:wxid];
             if (name.length == 0) name = wxid;
             [result addObject:@{ @"wxid": wxid, @"name": name }];
         }
     }
     @catch (NSException *e) {
+        NSLog(@"[WAR] membersOfGroup exception: %@", e);
         return @[];
     }
 
