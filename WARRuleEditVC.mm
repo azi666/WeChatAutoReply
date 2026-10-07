@@ -100,7 +100,7 @@ static NSString *const kRowEnabled = @"enabled";
     NSMutableArray *rules = [[WARRule loadAllRules] mutableCopy];
     NSInteger existing = -1;
     for (NSInteger i = 0; i < (NSInteger)rules.count; i++) {
-        if ([rules[i].ruleID isEqualToString:self.rule.ruleID]) { existing = i; break; }
+        if ([((WARRule *)rules[i]).ruleID isEqualToString:self.rule.ruleID]) { existing = i; break; }
     }
     if (existing >= 0) {
         rules[existing] = self.rule;
