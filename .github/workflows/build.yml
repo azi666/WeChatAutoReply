@@ -28,10 +28,21 @@ jobs:
 
       - name: Install ldid
         run: |
-          # theos/ldid ships prebuilt binaries in the repo root.
-          # Download the Linux binary directly (avoids git credential helper issues).
-          curl -fsSL -o "$THEOS/bin/ldid" \
-            https://raw.githubusercontent.com/theos/ldid/master/ldid
+          # Download theos/ldid source tarball via codeload (no git auth needed)
+          # and compile it. ldid is a single C++ source depending on libxml2.
+          curl -fsSL -o /tmp/ldid.tar.gz \
+            https://codeload.github.com/theos/ldid/tar.gz/refs/heads/master
+          tar -xzf /tmp/ldid.tar.gz -C /tmp
+          cd /tmp/ldid-master
+          # Try the repo Makefile first; fall back to manual compile
+          if [ -f Makefile ]; then
+            make INSTALL_PREFIX=/usr 2>&1 | tail -5 || true
+          fi
+          if [ -f ldid ]; then
+            cp ldid "$THEOS/bin/ldid"
+          else
+            clang++ -O2 -o "$THEOS/bin/ldid" ldid.cpp -lxml2 -lz -lpthread
+          fi
           chmod +x "$THEOS/bin/ldid"
           ls -la "$THEOS/bin/ldid"
           "$THEOS/bin/ldid" --version 2>&1 || true
