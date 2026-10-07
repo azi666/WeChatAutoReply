@@ -26,6 +26,18 @@ jobs:
         run: |
           git clone --recursive https://github.com/theos/theos.git "$THEOS"
 
+      - name: Install iOS toolchain
+        run: |
+          # Theos needs an iOS cross-compile toolchain (clang targeting arm64-apple-ios).
+          # Download from L1ghtmann/llvm-project releases (what install-theos uses).
+          ARCH="$(uname -m)"
+          mkdir -p "$THEOS/toolchain"
+          curl -fsSL "https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-${ARCH}.tar.xz" \
+            | tar -xJf - -C "$THEOS/toolchain/"
+          ls -la "$THEOS/toolchain/linux/iphone/bin/clang" 2>/dev/null || \
+            ls -la "$THEOS/toolchain/"*/bin/clang 2>/dev/null || \
+            find "$THEOS/toolchain" -name clang -type f 2>/dev/null | head
+
       - name: Install ldid
         run: |
           # ldid is maintained by ProcursusTeam (theos/ldid is gone).
