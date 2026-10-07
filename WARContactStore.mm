@@ -6,6 +6,8 @@
 #import "WeChatHeaders.h"
 #import <objc/runtime.h>
 
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+
 #pragma mark - 工具
 
 static CContactMgr *WARContactMgr(void) {
