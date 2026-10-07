@@ -1,0 +1,9 @@
+Package: com.war.wechatautoreply
+Name: WeChatAutoReply
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: Auto reply for specified group chat / member / message in WeChat
+Maintainer: war
+Author: war
+Section: Tweaks
+Depends: mobilesubstrate

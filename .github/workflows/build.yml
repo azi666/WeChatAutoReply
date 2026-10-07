@@ -1,0 +1,52 @@
+name: Build WeChatAutoReply
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fakeroot ldid dpkg perl git curl xz-utils make clang lld
+
+      - name: Clone Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+
+      - name: Install iPhoneOS 16.5 SDK
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /tmp/sdks
+          cd /tmp/sdks
+          git sparse-checkout set iPhoneOS16.5.sdk
+          mkdir -p "$THEOS/sdks"
+          cp -r /tmp/sdks/iPhoneOS16.5.sdk "$THEOS/sdks/"
+
+      - name: Build tweak
+        run: |
+          make package FINALPACKAGE=1
+
+      - name: Upload dylib (for TrollStore injection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeChatAutoReply-dylib
+          path: .theos/obj/WeChatAutoReply.dylib
+          if-no-files-found: error
+
+      - name: Upload deb (for jailbroken devices)
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeChatAutoReply-deb
+          path: packages/*.deb
+          if-no-files-found: error
